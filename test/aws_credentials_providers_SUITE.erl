@@ -24,6 +24,7 @@
 -define(DUMMY_SESSION_TOKEN, "dummy-session-token").
 -define(DUMMY_REGION, <<"us-east-1">>).
 -define(DUMMY_REGION2, <<"us-east-2">>).
+-define(DUMMY_EXPIRATION, <<"2035-09-25T23:43:56Z">>).
 
 all() ->
   [ {group, file}
@@ -38,6 +39,7 @@ all() ->
   , {group, eks}
   , {group, web_identity}
   , {group, web_identity_default_session_name}
+  , {group, web_identity_error}
   , {group, credential_process}
   ].
 
@@ -54,6 +56,7 @@ groups() ->
   , {eks, [], all_testcases()}
   , {web_identity, [], all_testcases()}
   , {web_identity_default_session_name, [], all_testcases()}
+  , {web_identity_error, [], all_testcases()}
   , {credential_process, [], all_testcases()}
   ].
 
@@ -81,6 +84,8 @@ init_per_group(GroupName, Config) ->
         init_group(credential_process, provider(file), credential_process, Config);
     web_identity_default_session_name = GroupName ->
         init_group(GroupName, provider(web_identity), GroupName, Config);
+    web_identity_error ->
+        init_group(web_identity_error, provider(web_identity), web_identity, Config);
     GroupName -> init_group(GroupName, Config)
   end.
 
@@ -135,6 +140,14 @@ assert_test(WebIdentity) when WebIdentity =:= web_identity;
   assert_values(?DUMMY_ACCESS_KEY, ?DUMMY_SECRET_ACCESS_KEY, Provider),
   #{token := Token} = aws_credentials:get_credentials(),
   ?assertEqual(<<"unused">>, Token);
+assert_test(web_identity_error) ->
+  ?assertEqual(undefined, aws_credentials:get_credentials()),
+  {error, [{_, {error, ErrorInfo}}]} =
+    aws_credentials_provider:fetch(),
+  #{status := 400, message := Message, code := Code} = ErrorInfo,
+  ExpectedMsg = <<"The web identity token that was passed is expired">>,
+  ?assertEqual(<<"InvalidIdentityToken">>, Code),
+  ?assertEqual(ExpectedMsg, Message);
 assert_test(GroupName) ->
   Provider = provider(GroupName),
   assert_values(?DUMMY_ACCESS_KEY, ?DUMMY_SECRET_ACCESS_KEY, Provider).
@@ -249,6 +262,19 @@ setup_provider(web_identity, Config) ->
   , env => [ {"AWS_ROLE_ARN", OldRoleArn}
   , {"AWS_WEB_IDENTITY_TOKEN_FILE", OldWebIdentityTokenFile}
   ]};
+setup_provider(web_identity_error, Config) ->
+  OldRoleArn = os:getenv("AWS_ROLE_ARN"),
+  OldWebIdentityTokenFile = os:getenv("AWS_WEB_IDENTITY_TOKEN_FILE"),
+  application:set_env(aws_credentials, fail_if_unavailable, false),
+  os:putenv("AWS_ROLE_ARN", "arg:aws:iam::123123123"),
+  os:putenv("AWS_WEB_IDENTITY_TOKEN_FILE", ?config(data_dir, Config) ++ "web_identity/token"),
+  meck:new(httpc, [no_link, passthrough]),
+  meck:expect(httpc, request, fun mock_httpc_request_web_identity_error/5),
+  #{ mocks => [httpc]
+   , env => [ {"AWS_ROLE_ARN", OldRoleArn}
+            , {"AWS_WEB_IDENTITY_TOKEN_FILE", OldWebIdentityTokenFile}
+            ]
+   };
 setup_provider(config_env, Config) ->
   Old = os:getenv("AWS_CONFIG_FILE"),
   os:putenv("AWS_CONFIG_FILE", ?config(data_dir, Config) ++ "env/config"),
@@ -283,6 +309,7 @@ setup_provider(_GroupName, _Config) ->
    }.
 
 teardown_provider(Context) ->
+  application:unset_env(aws_credentials, fail_if_unavailable),
   #{mocks := Mocks, env := Env} = Context,
   [meck:unload(Mock) || Mock <- Mocks],
   [maybe_put_env(Key, Value) || {Key, Value} <- Env],
@@ -301,7 +328,7 @@ mock_httpc_request_ec2(Method, Request, HTTPOptions, Options, Profile) ->
       {ok, response('document')};
     _ ->
       meck:passthrough([Method, Request, HTTPOptions, Options, Profile])
-end.
+  end.
 
 mock_httpc_request_ecs(Method, Request, HTTPOptions, Options, Profile) ->
   case Request of
@@ -343,9 +370,19 @@ mock_httpc_request_web_identity(Method, Request, HTTPOptions, Options, Profile) 
     _ ->
       meck:passthrough([Method, Request, HTTPOptions, Options, Profile])
   end.
+mock_httpc_request_web_identity_error(Method, {Url, Headers}, HTTPOptions, Options, Profile) ->
+  case string:find(Url, "sts.amazonaws.com") of
+    nomatch ->
+      meck:passthrough([Method, {Url, Headers}, HTTPOptions, Options, Profile]);
+    _ ->
+      {ok, response(400, 'web-identity-error')}
+  end.
 
 response(BodyTag) ->
-  StatusLine = {unused, 200, unused},
+  response(200, BodyTag).
+
+response(Status, BodyTag) ->
+  StatusLine = {"HTTP/1.1", Status, ""},
   Headers = [],
   Body = body(BodyTag),
   {StatusLine, Headers, Body}.
@@ -357,7 +394,7 @@ body('security-credentials') ->
 body('dummy-role') ->
   jsx:encode(#{ 'AccessKeyId' => ?DUMMY_ACCESS_KEY
               , 'SecretAccessKey' => ?DUMMY_SECRET_ACCESS_KEY
-              , 'Expiration' => <<"2026-09-25T23:43:56Z">>
+              , 'Expiration' => ?DUMMY_EXPIRATION
               , 'Token' => unused
               });
 body('document') ->
@@ -365,26 +402,35 @@ body('document') ->
 body('dummy-uri') ->
   jsx:encode(#{ 'AccessKeyId' => ?DUMMY_ACCESS_KEY
               , 'SecretAccessKey' => ?DUMMY_SECRET_ACCESS_KEY
-              , 'Expiration' => <<"2026-09-25T23:43:56Z">>
+              , 'Expiration' => ?DUMMY_EXPIRATION
               , 'Token' => unused
               });
 body('eks-credentials') ->
   jsx:encode(#{ 'AccessKeyId' => ?DUMMY_ACCESS_KEY
               , 'SecretAccessKey' => ?DUMMY_SECRET_ACCESS_KEY
-              , 'Expiration' => <<"2026-09-25T23:43:56Z">>
+              , 'Expiration' => ?DUMMY_EXPIRATION
               , 'Token' => unused
               });
 body('web-identity-credentials') ->
-  <<"<AssumeRoleWithWebIdentityResponse>
-    <AssumeRoleWithWebIdentityResult>
-      <Credentials>
-        <AccessKeyId>", ?DUMMY_ACCESS_KEY/binary, "</AccessKeyId>
-        <SecretAccessKey>", ?DUMMY_SECRET_ACCESS_KEY/binary, "</SecretAccessKey>
-        <SessionToken>unused</SessionToken>
-        <Expiration>2026-09-25T23:43:56Z</Expiration>
-      </Credentials>
-    </AssumeRoleWithWebIdentityResult>
-  </AssumeRoleWithWebIdentityResponse>">>.
+  <<"<AssumeRoleWithWebIdentityResponse>\n"
+    "  <AssumeRoleWithWebIdentityResult>\n"
+    "    <Credentials>\n"
+    "      <AccessKeyId>", ?DUMMY_ACCESS_KEY/binary, "</AccessKeyId>\n"
+    "      <SecretAccessKey>", ?DUMMY_SECRET_ACCESS_KEY/binary, "</SecretAccessKey>\n"
+    "      <SessionToken>unused</SessionToken>\n"
+    "      <Expiration>", ?DUMMY_EXPIRATION/binary, "</Expiration>\n"
+    "    </Credentials>\n"
+    "  </AssumeRoleWithWebIdentityResult>\n"
+    "</AssumeRoleWithWebIdentityResponse>">>;
+body('web-identity-error') ->
+  <<"<ErrorResponse xmlns=\"https://sts.amazonaws.com/doc/2011-06-15/\">\n"
+    "  <Error>\n"
+    "    <Type>User</Type>\n"
+    "    <Code>InvalidIdentityToken</Code>\n"
+    "    <Message>The web identity token that was passed is expired</Message>\n"
+    "  </Error>\n"
+    "  <RequestId>dummy-request-id</RequestId>\n"
+    "</ErrorResponse>">>.
 
 maybe_put_env(Key, false) ->
   os:unsetenv(Key);

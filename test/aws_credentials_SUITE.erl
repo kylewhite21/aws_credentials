@@ -19,7 +19,7 @@ init_per_group(mecked_metadata, Config) ->
     Role = <<"aws-metadata-user">>,
     AccessKeyID = <<"AccessKeyID">>,
     SecretAccessKey = <<"SecretAccessKey">>,
-    Expiry = <<"2025-09-25T23:43:56Z">>,
+    Expiry = <<"2035-09-25T23:43:56Z">>,
     Region = <<"ap-southeast-1">>,
     Token = <<"token">>,
     Credentials = <<"{
@@ -29,7 +29,7 @@ init_per_group(mecked_metadata, Config) ->
       \"AccessKeyId\" : \"AccessKeyID\",
       \"SecretAccessKey\" : \"SecretAccessKey\",
       \"Token\" : \"token\",
-      \"Expiration\" : \"2025-09-25T23:43:56Z\"
+      \"Expiration\" : \"2035-09-25T23:43:56Z\"
     }">>,
     Document = <<"{
       \"instanceType\" : \"t2.micro\",

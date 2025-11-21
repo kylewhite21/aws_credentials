@@ -46,13 +46,28 @@ fetch_assume_role_token(RoleArn, {ok, AuthToken}, SessionName) ->
   aws_credentials_httpc:request(get, Url).
 
 -spec make_map({error, _}
-| {ok, aws_credentials_httpc:status_code(),
+            | {ok, aws_credentials_httpc:status_code(),
                     aws_credentials_httpc:body(),
                     aws_credentials_httpc:headers()}) ->
         {error, _}
       | {ok, aws_credentials:credentials(), aws_credentials_provider:expiration()}.
 make_map({error, _Error} = Error) -> Error;
-make_map({ok, _Status, Body, _Headers}) ->
+make_map({ok, Status, Body, Headers}) ->
+  handle_response(Status, Body, Headers).
+
+-spec handle_response(aws_credentials_httpc:status_code(),
+                      aws_credentials_httpc:body(),
+                      aws_credentials_httpc:headers()) ->
+        {error, _}
+      | {ok, aws_credentials:credentials(), aws_credentials_provider:expiration()}.
+handle_response(200, Body, _Headers) ->
+  parse_credentials(Body);
+handle_response(Status, Body, Headers) ->
+  {error, build_error_payload(Status, Body, Headers)}.
+
+-spec parse_credentials(aws_credentials_httpc:body()) ->
+        {ok, aws_credentials:credentials(), aws_credentials_provider:expiration()}.
+parse_credentials(Body) ->
   {Doc, []} = xmerl_scan:string(binary_to_list(Body)),
   [#xmlText{value = AccessKeyId}] = xmerl_xpath:string("//Credentials/AccessKeyId/text()", Doc),
   [#xmlText{value = SecretAccessKey}] =
@@ -64,3 +79,32 @@ make_map({ok, _Status, Body, _Headers}) ->
     list_to_binary(SecretAccessKey),
     list_to_binary(Token)),
   {ok, Creds, list_to_binary(Expiration)}.
+
+-spec build_error_payload(aws_credentials_httpc:status_code(),
+                          aws_credentials_httpc:body(),
+                          aws_credentials_httpc:headers()) -> map().
+build_error_payload(Status, Body, _Headers) ->
+  try xmerl_scan:string(binary_to_list(Body)) of
+    {Doc, []} ->
+      #{ status => Status,
+        code => extract_code(Doc),
+        message => extract_error_message(Doc)
+      }
+  catch
+   _ ->
+    <<"unable to parse response as XML">>
+  end.
+
+-spec extract_code(XmlElement::any()) -> binary().
+extract_code(Doc) ->
+  case xmerl_xpath:string("//*[local-name()='Code']/text()", Doc) of
+    [#xmlText{value = C}] -> list_to_binary(C);
+    _ -> <<"Unable to find error code in AssumeRoleWithWebIdentity response">>
+  end.
+
+-spec extract_error_message(XmlElement::any()) -> binary().
+extract_error_message(Doc) ->
+  case xmerl_xpath:string("//*[local-name()='Message']/text()", Doc) of
+    [#xmlText{value = Msg}] -> list_to_binary(Msg);
+    _ -> <<"Unable to find error message in AssumeRoleWithWebIdentity response">>
+  end.

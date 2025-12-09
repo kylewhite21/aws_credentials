@@ -142,19 +142,25 @@ read_from_profile(File, Profile) ->
                     % https://docs.aws.amazon.com/cli/v1/userguide/cli-configure-sourcing-external.html
                     Process = maps:get(<<"credential_process">>, Map),
                     Stdout = os:cmd(binary_to_list(Process)),
-                    CredResult = jsx:decode(iolist_to_binary(Stdout)),
-                    CredsMap = maps:from_list(lists:filtermap(
-                        fun
-                            ({<<"AccessKeyId">>, AKI}) ->
-                                {true, {<<"aws_access_key_id">>, AKI}};
-                            ({<<"SecretAccessKey">>, SAK}) ->
-                                {true, {<<"aws_secret_access_key">>, SAK}};
-                            ({<<"SessionToken">>, ST}) ->
-                                {true, {<<"aws_session_token">>, ST}};
-                            (_) ->
-                                false
-                        end, maps:to_list(CredResult))),
-                    {ok, maps:merge(Map, CredsMap)};
+                    StdoutBinary = iolist_to_binary(Stdout),
+                    try jsx:decode(StdoutBinary) of
+                        CredResult ->
+                            CredsMap = maps:from_list(lists:filtermap(
+                                fun
+                                    ({<<"AccessKeyId">>, AKI}) ->
+                                        {true, {<<"aws_access_key_id">>, AKI}};
+                                    ({<<"SecretAccessKey">>, SAK}) ->
+                                        {true, {<<"aws_secret_access_key">>, SAK}};
+                                    ({<<"SessionToken">>, ST}) ->
+                                        {true, {<<"aws_session_token">>, ST}};
+                                    (_) ->
+                                        false
+                                end, maps:to_list(CredResult))),
+                            {ok, maps:merge(Map, CredsMap)}
+                    catch
+                        error:badarg ->
+                            {error, {credential_process_json_error, StdoutBinary}}
+                    end;
                 false ->
                     {ok, Map}
             end

@@ -61,8 +61,8 @@ get_env([]) -> undefined;
 get_env([Head | Tail]) ->
     case {erlang_get_env(Head), os_getenv(Head)} of
         {undefined, false} -> get_env(Tail);
-        {EnvVar, false} -> list_to_binary(EnvVar);
-        {_,  OSVal} -> list_to_binary(OSVal)
+        {undefined,  OSVal} -> list_to_binary(OSVal);
+        {EnvVar, _} -> list_to_binary(EnvVar)
     end.
 
 -spec os_getenv(string()) -> false | string().

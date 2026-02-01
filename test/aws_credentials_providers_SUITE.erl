@@ -35,6 +35,7 @@ all() ->
   , {group, ec2}
   , {group, env}
   , {group, application_env}
+  , {group, env_precedence}
   , {group, ecs}
   , {group, eks}
   , {group, web_identity}
@@ -52,6 +53,7 @@ groups() ->
   , {ec2, [], all_testcases()}
   , {env, [], all_testcases()}
   , {application_env, [], all_testcases()}
+  , {env_precedence, [], all_testcases()}
   , {ecs, [], all_testcases()}
   , {eks, [], all_testcases()}
   , {web_identity, [], all_testcases()}
@@ -80,6 +82,7 @@ init_per_group(GroupName, Config) ->
     credential_env -> init_group(credential_env, provider(file), credential_env, Config);
     profile_env -> init_group(profile_env, provider(file), config_credential, Config);
     application_env -> init_group(application_env, provider(env), application_env, Config);
+    env_precedence -> init_group(env_precedence, provider(env), env_precedence, Config);
     credential_process ->
         init_group(credential_process, provider(file), credential_process, Config);
     web_identity_default_session_name = GroupName ->
@@ -120,6 +123,9 @@ assert_test(config_env) ->
   Provider = provider(file),
   assert_values(?DUMMY_ACCESS_KEY, ?DUMMY_SECRET_ACCESS_KEY, Provider, ?DUMMY_REGION2);
 assert_test(application_env) ->
+  Provider = provider(env),
+  assert_values(?DUMMY_ACCESS_KEY, ?DUMMY_SECRET_ACCESS_KEY, Provider);
+assert_test(env_precedence) ->
   Provider = provider(env),
   assert_values(?DUMMY_ACCESS_KEY, ?DUMMY_SECRET_ACCESS_KEY, Provider);
 assert_test(credential_env) ->
@@ -302,6 +308,22 @@ setup_provider(application_env, _Config) ->
                      , binary_to_list(?DUMMY_SECRET_ACCESS_KEY)),
   #{ mocks => []
    , env => []
+   };
+setup_provider(env_precedence, _Config) ->
+  OldAccessKeyId = os:getenv("AWS_ACCESS_KEY_ID"),
+  OldSecretAccessKey = os:getenv("AWS_SECRET_ACCESS_KEY"),
+  os:putenv("AWS_ACCESS_KEY_ID", binary_to_list(?DUMMY_ACCESS_KEY2)),
+  os:putenv("AWS_SECRET_ACCESS_KEY", binary_to_list(?DUMMY_SECRET_ACCESS_KEY2)),
+  application:set_env(aws_credentials
+                     , aws_access_key_id
+                     , binary_to_list(?DUMMY_ACCESS_KEY)),
+  application:set_env(aws_credentials
+                     , aws_secret_access_key
+                     , binary_to_list(?DUMMY_SECRET_ACCESS_KEY)),
+  #{ mocks => []
+   , env => [ {"AWS_ACCESS_KEY_ID", OldAccessKeyId}
+            , {"AWS_SECRET_ACCESS_KEY", OldSecretAccessKey}
+            ]
    };
 setup_provider(_GroupName, _Config) ->
   #{ mocks => []
